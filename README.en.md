@@ -58,10 +58,12 @@ pip install -r requirements.txt
 streamlit run dashboard.py
 ```
 
-The dashboard opens at `http://localhost:8501`, with two tabs: the guided
-example (training, loss curve, confusion matrix, comparison with k-NN) and
-the challenge (the five images, each prediction, and the investigation into
-why accuracy drops).
+The dashboard opens at `http://localhost:8501`, with three tabs: the guided
+example (training, loss curve, confusion matrix, comparison with k-NN), the
+challenge (the five images, each prediction, and the investigation into why
+accuracy drops), and a tab to draw or upload your own digit and see the
+live prediction, choosing between the three trained models (original MLP,
+augmented MLP, or k-NN).
 
 The original class notebook (`aula04_rede_digitos.ipynb`) has the same
 pipeline as a step-by-step exercise, with the challenge's answers written in

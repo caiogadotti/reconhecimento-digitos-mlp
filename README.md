@@ -57,10 +57,12 @@ pip install -r requirements.txt
 streamlit run dashboard.py
 ```
 
-O dashboard abre em `http://localhost:8501`, com duas abas: o exemplo guiado
-(treino, curva de perda, matriz de confusão, comparação com k-NN) e o
-desafio autoral (as cinco imagens, previsão de cada uma, e a investigação de
-por que a acurácia cai).
+O dashboard abre em `http://localhost:8501`, com três abas: o exemplo guiado
+(treino, curva de perda, matriz de confusão, comparação com k-NN), o desafio
+autoral (as cinco imagens, previsão de cada uma, e a investigação de por que
+a acurácia cai) e uma aba pra desenhar ou enviar seu próprio dígito e ver a
+previsão ao vivo, escolhendo entre os três modelos treinados (MLP original,
+MLP com data augmentation, ou k-NN).
 
 O notebook original da aula (`aula04_rede_digitos.ipynb`) contém o mesmo
 pipeline em formato de exercício, célula por célula, com as respostas do
