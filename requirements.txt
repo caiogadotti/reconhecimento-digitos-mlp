@@ -1,7 +1,9 @@
 streamlit
+streamlit-drawable-canvas
 scikit-learn
 scikit-image
 numpy
 pandas
 Pillow
 matplotlib
+scipy

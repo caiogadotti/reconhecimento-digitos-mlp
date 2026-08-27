@@ -6,6 +6,7 @@ import streamlit as st
 from PIL import Image
 from scipy.ndimage import gaussian_filter, grey_dilation, grey_erosion
 from skimage.filters import threshold_otsu
+from streamlit_drawable_canvas import st_canvas
 from sklearn.datasets import load_digits
 from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score
 from sklearn.model_selection import train_test_split
@@ -20,6 +21,18 @@ BASE_DIR = Path(__file__).parent
 PASTA_DESAFIO = BASE_DIR / "digitos_desafio"
 
 st.set_page_config(page_title="Aula 4 - Redes Neurais", page_icon="🔢", layout="wide")
+
+# streamlit-drawable-canvas as vezes nao consegue medir a propria altura via
+# postMessage nessa versao do Streamlit (o iframe fica com height=0). Forcar
+# a altura via CSS contorna o problema sem depender do auto-resize do componente.
+st.markdown(
+    """
+    <style>
+    iframe[title="streamlit_drawable_canvas.st_canvas"] { height: 300px !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource
@@ -115,9 +128,12 @@ def treinar_modelo_aumentado(_X_train, _y_train, _X_test, _y_test, n_copias=3):
     }
 
 
-def preprocess_external_digit(path, threshold_frac=0.2, metodo="fixo"):
+def preprocess_external_digit(imagem_ou_caminho, threshold_frac=0.2, metodo="fixo"):
     """Recorta o digito, centraliza e reduz pra 8x8 em escala 0-16 (mesmo formato do dataset digits)."""
-    image = Image.open(path).convert("L")
+    if isinstance(imagem_ou_caminho, Image.Image):
+        image = imagem_ou_caminho.convert("L")
+    else:
+        image = Image.open(imagem_ou_caminho).convert("L")
     array = np.asarray(image, dtype=float)
     if array.mean() > 127:
         array = 255 - array
@@ -145,6 +161,25 @@ def preprocess_external_digit(path, threshold_frac=0.2, metodo="fixo"):
     if result.max() > 0:
         result = 16 * result / result.max()
     return result
+
+
+OPCOES_MODELO = ["mlp", "mlp_aumentada", "knn"]
+ROTULOS_MODELO = {
+    "mlp": "Rede neural (MLP), só dataset digits",
+    "mlp_aumentada": "Rede neural (MLP), com data augmentation",
+    "knn": "k-NN (k=3, mesmo da Aula 2)",
+}
+
+
+def resolver_modelo(escolha, dados):
+    """Devolve (modelo treinado, legenda pra mostrar) a partir da escolha do radio."""
+    if escolha == "mlp_aumentada":
+        modelo_aumentado = treinar_modelo_aumentado(dados["X_train"], dados["y_train"], dados["X_test"], dados["y_test"])
+        legenda = f"Treinada com {modelo_aumentado['n_treino']} imagens (dataset original + 3 cópias aumentadas). Acurácia no teste padrão: {modelo_aumentado['acc_teste']:.1%}."
+        return modelo_aumentado["rede"], legenda
+    if escolha == "knn":
+        return dados["knn"], f"k-NN com k=3, o mesmo modelo da Aula 2. Acurácia no teste padrão: {dados['acc_knn']:.1%}."
+    return dados["rede"], f"Rede original, só treinada no dataset digits. Acurácia no teste padrão: {dados['acc_rede']:.1%}."
 
 
 @st.cache_data
@@ -182,7 +217,7 @@ st.markdown(
 
 dados = treinar_modelos()
 
-aba_guiado, aba_desafio = st.tabs(["Exemplo guiado", "Desafio autoral"])
+aba_guiado, aba_desafio, aba_teste = st.tabs(["Exemplo guiado", "Desafio autoral", "Testar seu dígito"])
 
 with aba_guiado:
     st.header("Como a rede foi montada")
@@ -297,10 +332,10 @@ with aba_desafio:
             "dentro de cada grupo."
         )
     with col_modelo:
-        usar_aumentada = st.radio(
-            "Qual rede usar?",
-            options=[False, True],
-            format_func=lambda v: "Rede original (só dataset digits)" if not v else "Rede com data augmentation",
+        escolha_modelo = st.radio(
+            "Qual modelo usar?",
+            options=OPCOES_MODELO,
+            format_func=lambda m: ROTULOS_MODELO[m],
         )
         st.caption(
             "Data augmentation: para cada imagem de treino, gera cópias com variação "
@@ -314,14 +349,10 @@ with aba_desafio:
         disabled=metodo == "otsu",
     )
 
-    if usar_aumentada:
-        modelo_aumentado = treinar_modelo_aumentado(dados["X_train"], dados["y_train"], dados["X_test"], dados["y_test"])
-        rede_usada = modelo_aumentado["rede"]
-        st.caption(f"Rede treinada com {modelo_aumentado['n_treino']} imagens (dataset original + 3 cópias aumentadas). Acurácia no teste padrão: {modelo_aumentado['acc_teste']:.1%}.")
-    else:
-        rede_usada = dados["rede"]
+    rede_usada, legenda_modelo = resolver_modelo(escolha_modelo, dados)
+    st.caption(legenda_modelo)
 
-    resultados = avaliar_desafio(rede_usada, threshold_frac, metodo, "aumentada" if usar_aumentada else "base")
+    resultados = avaliar_desafio(rede_usada, threshold_frac, metodo, escolha_modelo)
 
     if not resultados:
         st.warning(f"Nenhuma imagem encontrada em {PASTA_DESAFIO}.")
@@ -399,3 +430,84 @@ with aba_desafio:
             "passo de verdade seria treinar com fotos reais de dígitos escritos à "
             "mão, com a textura genuína de traço de caneta em vez de uma aproximação."
         )
+
+with aba_teste:
+    st.header("Desenhe ou envie um dígito e veja a rede prever, ao vivo")
+    st.markdown(
+        "Escolha qual rede e qual método de recorte usar (os mesmos das outras "
+        "abas), depois desenhe um número com o mouse ou envie uma imagem. A "
+        "previsão atualiza a cada traço novo."
+    )
+
+    col_desenho, col_config = st.columns([1.3, 1])
+    with col_config:
+        metodo_teste = st.radio(
+            "Método de recorte", options=["fixo", "otsu"],
+            format_func=lambda m: "Limiar fixo" if m == "fixo" else "Limiar de Otsu",
+            key="metodo_teste",
+        )
+        escolha_modelo_teste = st.radio(
+            "Qual modelo usar?", options=OPCOES_MODELO,
+            format_func=lambda m: ROTULOS_MODELO[m],
+            key="modelo_teste",
+        )
+        digito_real = st.selectbox("Qual dígito você vai desenhar? (só pra conferir se a rede acerta)", options=list(range(10)))
+
+    with col_desenho:
+        origem = st.radio(
+            "Como enviar o dígito?", options=["Desenhar", "Enviar imagem"],
+            horizontal=True, key="origem_digito",
+        )
+        imagem_usuario = None
+        if origem == "Desenhar":
+            tela = st_canvas(
+                stroke_width=18,
+                stroke_color="#ffffff",
+                background_color="#000000",
+                height=280,
+                width=280,
+                drawing_mode="freedraw",
+                key="tela_digito",
+            )
+            st.caption("O ícone de lixeira abaixo do quadro limpa o desenho.")
+            if tela.image_data is not None and tela.json_data and tela.json_data.get("objects"):
+                imagem_usuario = Image.fromarray(tela.image_data.astype(np.uint8), mode="RGBA")
+        else:
+            arquivo_enviado = st.file_uploader(
+                "Imagem do dígito (PNG ou JPG)", type=["png", "jpg", "jpeg"], label_visibility="collapsed",
+            )
+            if arquivo_enviado is not None:
+                imagem_usuario = Image.open(arquivo_enviado)
+
+    if imagem_usuario is not None:
+        img_8x8 = preprocess_external_digit(imagem_usuario, 0.2, metodo_teste)
+        if img_8x8 is None:
+            st.warning("Não encontrei nenhum traço na imagem. Desenhe com mais contraste ou envie outra foto.")
+        else:
+            rede_teste, legenda_teste = resolver_modelo(escolha_modelo_teste, dados)
+            st.caption(legenda_teste)
+
+            vetor = img_8x8.reshape(1, -1)
+            previsto = int(rede_teste.predict(vetor)[0])
+            probabilidades = rede_teste.predict_proba(vetor)[0]
+
+            col_img, col_prob = st.columns(2)
+            with col_img:
+                fig, ax = plt.subplots(figsize=(2.5, 2.5))
+                ax.imshow(img_8x8, cmap="gray_r", vmin=0, vmax=16)
+                ax.axis("off")
+                ax.set_title("o que a rede recebe (8x8)", fontsize=9)
+                st.pyplot(fig)
+            with col_prob:
+                veredito = "acertou" if previsto == digito_real else "errou"
+                st.metric("Previsão da rede", str(previsto), f"{veredito} (você disse {digito_real})", delta_color="off")
+                fig, ax = plt.subplots(figsize=(5, 3))
+                cores = ["#167D7F" if i == previsto else "#444" for i in range(10)]
+                ax.bar(range(10), probabilidades, color=cores)
+                ax.set_xticks(range(10))
+                ax.set_xlabel("dígito")
+                ax.set_ylabel("probabilidade")
+                ax.set_ylim(0, 1)
+                st.pyplot(fig)
+    else:
+        st.info("Desenhe um número ou envie uma imagem para ver a previsão.")
