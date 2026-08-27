@@ -114,6 +114,32 @@ comparação ao vivo, com o método de limiar selecionável.
 
 ---
 
+## Tentando corrigir: data augmentation
+
+Se a rede nunca viu o estilo de foto real, o próximo passo natural é
+treiná-la com exemplos desse estilo. A função `augmentar_digito` gera cópias
+de cada imagem de treino com variação de espessura do traço (dilatação ou
+erosão), desfoque leve (`gaussian_filter`, simula antialiasing) e ruído
+(simula sombra e textura de papel), e a rede é retreinada com o dataset
+original mais três cópias aumentadas de cada imagem.
+
+Testando as quatro combinações (rede original/aumentada × limiar fixo/Otsu):
+
+| | Limiar fixo | Limiar de Otsu |
+|---|---:|---:|
+| Rede original | 1/5 (20%) | 1/5 (20%) |
+| Rede com augmentation | 1/5 (20%) | **2/5 (40%)** |
+
+Nenhuma melhoria isolada resolve sozinha - é preciso corrigir o recorte
+**e** o estilo do traço ao mesmo tempo para ver qualquer ganho. Mesmo assim,
+40% fica longe dos 96% do dataset original: o próximo passo de verdade
+seria treinar com fotos reais de dígitos escritos à mão, com a textura
+genuína de caneta, em vez de uma aproximação sintética dela. A acurácia no
+teste padrão também subiu com a rede aumentada, de 96,0% para 98,0% - o
+augmentation não piora o desempenho no cenário original.
+
+---
+
 ## Estrutura do projeto
 
 ```

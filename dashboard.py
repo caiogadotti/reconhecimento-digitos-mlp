@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
+from scipy.ndimage import gaussian_filter, grey_dilation, grey_erosion
 from skimage.filters import threshold_otsu
 from sklearn.datasets import load_digits
 from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score
@@ -54,6 +55,8 @@ def treinar_modelos():
         "X": X,
         "rede": rede,
         "knn": knn,
+        "X_train": X_train,
+        "y_train": y_train,
         "X_test": X_test,
         "y_test": y_test,
         "y_pred_rede": y_pred_rede,
@@ -62,6 +65,53 @@ def treinar_modelos():
         "acc_knn": accuracy_score(y_test, y_pred_knn),
         "epocas": rede.named_steps["mlp"].n_iter_,
         "loss_curve": rede.named_steps["mlp"].loss_curve_,
+    }
+
+
+def augmentar_digito(imagem_8x8, rng):
+    """Varia espessura (dilatacao/erosao), aplica desfoque leve e ruido, simulando foto real."""
+    im = imagem_8x8.copy()
+    operacao = rng.choice(["dilatar", "erodir", "nenhuma"])
+    if operacao == "dilatar":
+        im = grey_dilation(im, size=(2, 2))
+    elif operacao == "erodir":
+        im = grey_erosion(im, size=(2, 2))
+    if rng.random() < 0.7:
+        im = gaussian_filter(im, sigma=rng.uniform(0.3, 0.9))
+    if rng.random() < 0.6:
+        im = im + rng.normal(0, rng.uniform(0.3, 1.2), im.shape)
+    return np.clip(im, 0, 16)
+
+
+@st.cache_resource
+def treinar_modelo_aumentado(_X_train, _y_train, _X_test, _y_test, n_copias=3):
+    rng = np.random.default_rng(42)
+    X_partes = [_X_train]
+    y_partes = [_y_train]
+    for _ in range(n_copias):
+        copias = np.array([augmentar_digito(img.reshape(8, 8), rng).ravel() for img in _X_train])
+        X_partes.append(copias)
+        y_partes.append(_y_train)
+    X_aumentado = np.vstack(X_partes)
+    y_aumentado = np.concatenate(y_partes)
+
+    rede = Pipeline([
+        ("scale", StandardScaler()),
+        ("mlp", MLPClassifier(
+            hidden_layer_sizes=(64, 32),
+            activation="relu",
+            max_iter=300,
+            early_stopping=True,
+            validation_fraction=0.15,
+            n_iter_no_change=15,
+            random_state=42,
+        )),
+    ])
+    rede.fit(X_aumentado, y_aumentado)
+    return {
+        "rede": rede,
+        "acc_teste": accuracy_score(_y_test, rede.predict(_X_test)),
+        "n_treino": X_aumentado.shape[0],
     }
 
 
@@ -98,7 +148,9 @@ def preprocess_external_digit(path, threshold_frac=0.2, metodo="fixo"):
 
 
 @st.cache_data
-def avaliar_desafio(_rede, threshold_frac=0.2, metodo="fixo"):
+def avaliar_desafio(_rede, threshold_frac=0.2, metodo="fixo", modelo_tag="base"):
+    # modelo_tag existe só pra entrar na chave do cache (o parâmetro _rede, com
+    # underscore, é ignorado pelo st.cache_data) e diferenciar rede original de aumentada.
     arquivos = sorted(PASTA_DESAFIO.glob("*.png")) + sorted(PASTA_DESAFIO.glob("*.jpg"))
     linhas = []
     for path in arquivos:
@@ -230,27 +282,46 @@ with aba_desafio:
         "do dataset de treino?"
     )
 
-    metodo = st.radio(
-        "Como separar o traço do fundo antes de reduzir a imagem para 8×8?",
-        options=["fixo", "otsu"],
-        format_func=lambda m: "Limiar fixo (o que o notebook usa)" if m == "fixo" else "Limiar de Otsu (adaptativo)",
-        horizontal=True,
-    )
-    st.caption(
-        "Limiar fixo: qualquer pixel acima de 20% do valor máximo da imagem "
-        "(`0.2 * array.max()`) é considerado \"traço\". Simples, mas quebra se a "
-        "imagem tiver sombra ou textura de fundo clara. "
-        "Limiar de Otsu: calcula automaticamente o ponto de corte que melhor separa "
-        "dois grupos de pixels (traço escuro vs fundo claro) pra cada imagem, "
-        "escolhendo o valor que minimiza a variância dentro de cada grupo."
-    )
+    col_metodo, col_modelo = st.columns(2)
+    with col_metodo:
+        metodo = st.radio(
+            "Como separar o traço do fundo antes de reduzir a imagem para 8×8?",
+            options=["fixo", "otsu"],
+            format_func=lambda m: "Limiar fixo (o que o notebook usa)" if m == "fixo" else "Limiar de Otsu (adaptativo)",
+        )
+        st.caption(
+            "Limiar fixo: qualquer pixel acima de 20% do valor máximo da imagem "
+            "(`0.2 * array.max()`) é considerado \"traço\". Quebra se a imagem tiver "
+            "sombra ou textura de fundo clara. Otsu: calcula automaticamente o ponto "
+            "de corte que melhor separa traço de fundo, minimizando a variância "
+            "dentro de cada grupo."
+        )
+    with col_modelo:
+        usar_aumentada = st.radio(
+            "Qual rede usar?",
+            options=[False, True],
+            format_func=lambda v: "Rede original (só dataset digits)" if not v else "Rede com data augmentation",
+        )
+        st.caption(
+            "Data augmentation: para cada imagem de treino, gera cópias com variação "
+            "de espessura do traço, desfoque leve e ruído, simulando o estilo de uma "
+            "foto real, e treina incluindo essas cópias junto com os dados originais."
+        )
+
     threshold_frac = st.slider(
         "Fração do pico usada como limiar (só entra em ação no método \"fixo\")",
         min_value=0.05, max_value=0.6, value=0.2, step=0.05,
         disabled=metodo == "otsu",
     )
 
-    resultados = avaliar_desafio(dados["rede"], threshold_frac, metodo)
+    if usar_aumentada:
+        modelo_aumentado = treinar_modelo_aumentado(dados["X_train"], dados["y_train"], dados["X_test"], dados["y_test"])
+        rede_usada = modelo_aumentado["rede"]
+        st.caption(f"Rede treinada com {modelo_aumentado['n_treino']} imagens (dataset original + 3 cópias aumentadas). Acurácia no teste padrão: {modelo_aumentado['acc_teste']:.1%}.")
+    else:
+        rede_usada = dados["rede"]
+
+    resultados = avaliar_desafio(rede_usada, threshold_frac, metodo, "aumentada" if usar_aumentada else "base")
 
     if not resultados:
         st.warning(f"Nenhuma imagem encontrada em {PASTA_DESAFIO}.")
@@ -278,7 +349,7 @@ with aba_desafio:
                 st.pyplot(fig)
 
         st.divider()
-        st.subheader("Por que a acurácia é tão mais baixa aqui que no teste (96%)?")
+        st.subheader("Por que a acurácia é tão mais baixa aqui que no teste?")
 
         media_treino = dados["X"].mean()
         desvio_treino = dados["X"].std()
@@ -316,10 +387,15 @@ with aba_desafio:
             "onde ela decide com confiança."
         )
         st.markdown(
-            "Troque o método de limiar acima entre **fixo** e **Otsu**: o recorte fica "
-            "visualmente mais limpo com Otsu (o traço se isola melhor da sombra), mas a "
-            "acurácia final não muda - porque o problema mostrado nos histogramas "
-            "acima (a textura de foto real, não o recorte) continua o mesmo nos dois "
-            "casos. Ou seja: um pré-processamento melhor resolve *onde* está o dígito, "
-            "não *como* ele foi desenhado."
+            "Testando as quatro combinações de método de limiar (fixo/Otsu) e rede "
+            "(original/com data augmentation), só uma chega a 2/5 (40%): **rede "
+            "aumentada + limiar de Otsu**. Nenhuma melhoria isolada resolve sozinha - "
+            "usar só Otsu com a rede original continua em 1/5, e treinar com "
+            "augmentation mas manter o limiar fixo também continua em 1/5. As duas "
+            "causas (recorte impreciso e estilo de traço diferente do treino) são "
+            "independentes: corrigir só uma não é suficiente, mas mesmo corrigindo as "
+            "duas juntas o resultado (40%) fica longe dos 96% do dataset original. "
+            "Isso sugere que data augmentation sintético tem um limite: o próximo "
+            "passo de verdade seria treinar com fotos reais de dígitos escritos à "
+            "mão, com a textura genuína de traço de caneta em vez de uma aproximação."
         )

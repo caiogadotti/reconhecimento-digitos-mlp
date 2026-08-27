@@ -116,6 +116,34 @@ selectable.
 
 ---
 
+## Trying to fix it: data augmentation
+
+If the network never saw the real-photo style, the natural next step is
+training it on examples of that style. The `augmentar_digito` function
+generates copies of each training image with stroke-thickness variation
+(dilation or erosion), light blur (`gaussian_filter`, simulating
+antialiasing), and noise (simulating shadow and paper texture), and the
+network is retrained on the original dataset plus three augmented copies of
+each image.
+
+Testing all four combinations (original/augmented network x fixed/Otsu
+threshold):
+
+| | Fixed threshold | Otsu threshold |
+|---|---:|---:|
+| Original network | 1/5 (20%) | 1/5 (20%) |
+| Augmented network | 1/5 (20%) | **2/5 (40%)** |
+
+No single fix works on its own: both the crop and the stroke style need
+fixing at the same time to see any gain. Even so, 40% is still far from the
+original dataset's 96%: the real next step would be training on actual
+photos of handwritten digits, with genuine pen-stroke texture instead of a
+synthetic approximation of it. Test accuracy on the standard split also
+went up with the augmented network, from 96.0% to 98.0%, so augmentation
+doesn't hurt performance in the original scenario.
+
+---
+
 ## Project structure
 
 ```
